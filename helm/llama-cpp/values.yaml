@@ -1,0 +1,67 @@
+image:
+  repository: localhost/fedora-llama-cpp-vulkan
+  tag: v4
+  pullPolicy: Never
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8080  # llama.cpp server default port
+
+persistence:
+  enabled: true
+  storageClass: "standard"             # keep empty → "use whatever SC is marked default"
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+# Model configuration
+model:
+  name: "gpt-oss-20b"
+  # Use bartowski's GGUF model
+  hf_repo: "bartowski/openai_gpt-oss-20b-GGUF"
+  filename: "openai_gpt-oss-20b-MXFP4.gguf"
+
+# llama.cpp server configuration
+server:
+  host: "0.0.0.0"
+  port: 8080
+  gpu_layers: 999
+  context_size: 8192
+  threads: 8
+
+# Environment variables for llama.cpp server
+env:
+  - name: SERVER_HOST
+    value: "0.0.0.0"
+  - name: SERVER_PORT
+    value: "8080"
+  - name: GPU_LAYERS
+    value: "999"
+  - name: CONTEXT_SIZE
+    value: "8192"
+  - name: THREADS
+    value: "8"
+
+resources:
+  requests:
+    cpu: 1000m
+    memory: 8Gi
+  limits:
+    cpu: 8000m
+    memory: 20Gi
+
+# Startup probe for model loading
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 20  # Allow 10 minutes for model loading
+
+# Log level
+log:
+  level: log-disable

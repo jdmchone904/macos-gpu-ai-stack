@@ -1,0 +1,17 @@
+apiVersion: v2
+name: n8n
+description: Helm chart for n8n – a workflow automation tool
+type: application
+version: 0.1.0
+appVersion: "latest"
+maintainers:
+  - name: Your Name
+    email: your@email.com
+keywords:
+  - workflow
+  - automation
+  - n8n
+sources:
+  - https://github.com/n8n-io/n8n
+
+

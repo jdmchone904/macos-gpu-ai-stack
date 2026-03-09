@@ -1,0 +1,63 @@
+# --------------------------------------------------------------------
+# General settings
+# --------------------------------------------------------------------
+replicaCount: 1
+
+image:
+  repository: n8nio/n8n
+  tag: 2.9.4-exp.0
+  pullPolicy: Always
+
+# -----------------------------------------
+# Existing persistence section (SQLite)
+# -----------------------------------------
+persistence:
+  enabled: true
+  storageClass: "standard"             # keep empty → "use whatever SC is marked default"
+  accessMode: ReadWriteOnce
+  size: 4Gi
+
+# --------------------------------------------------------------------
+# Environment variables
+# --------------------------------------------------------------------
+env:
+  DB_TYPE: sqlite              # keeps n8n using the local SQLite file
+  N8N_LOG_CONSOLE_LEVEL: info
+  N8N_LOG_OUTPUT: console  
+  N8N_HOST: localhost          # or n8n.local
+  N8N_PORT: 5678
+  N8N_PROTOCOL: http
+
+# --------------------------------------------------------------------
+# Service – exposes the n8n web UI on port 5678
+# --------------------------------------------------------------------
+service:
+  type: NodePort
+  port: 5678
+  nodePort: 30678              # Access via localhost:30678
+
+# --------------------------------------------------------------------
+# Ingress – disabled for NodePort access
+# --------------------------------------------------------------------
+ingress:
+  enabled: false               # Disabled - using NodePort instead
+
+# --------------------------------------------------------------------
+# Resource requests/limits (adjust if you hit OOMs)
+# --------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+# --------------------------------------------------------------------
+# HPA min/max replica count
+# --------------------------------------------------------------------
+hpa:
+  enabled: false                      # set to `true` to enable
+  minReplicas: 1
+  maxReplicas: 2
+  targetCPUUtilizationPercentage: 80

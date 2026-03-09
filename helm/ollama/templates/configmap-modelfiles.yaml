@@ -1,0 +1,13 @@
+{{- if .Values.models.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ollama.fullname" . }}-modelfiles
+  labels:
+    {{- include "ollama.labels" . | nindent 4 }}
+data:
+  {{- range .Values.models.create }}
+  {{ .name }}.Modelfile: |
+    {{- .modelfile | nindent 4 }}
+  {{- end }}
+{{- end }}

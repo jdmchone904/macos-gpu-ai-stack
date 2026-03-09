@@ -1,0 +1,19 @@
+
+apiVersion: v2
+name: llama-cpp
+description: A Helm chart for llama.cpp server with Apple Silicon GPU support
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - llama.cpp
+  - ai
+  - gpu
+  - apple-silicon
+  - machine-learning
+home: https://github.com/ggerganov/llama.cpp
+sources:
+  - https://github.com/ggerganov/llama.cpp
+maintainers:
+  - name: Your Name
+    email: your.email@example.com

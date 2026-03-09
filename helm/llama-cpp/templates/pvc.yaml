@@ -1,0 +1,17 @@
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llama-cpp.fullname" . }}-pvc
+  labels:
+    {{- include "llama-cpp.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+  # storageClassName: {{ .Values.persistence.storageClass }}
+  # NOTE: If `storageClass` is an empty string, Kubernetes will look for the *default* SC.
+  # By setting `staticVolume.storageClass` above we force the PVC to bind to that PV.
+{{- end }}

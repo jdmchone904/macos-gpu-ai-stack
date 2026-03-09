@@ -1,0 +1,89 @@
+{{- if or .Values.models.pull .Values.models.create .Values.models.run }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ollama.fullname" . }}-model-loader
+  labels:
+    {{- include "ollama.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ .Values.models.timeoutSeconds | default 3600 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ollama.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-loader
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: model-loader
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OLLAMA_HOST
+              value: "http://{{ include "ollama.fullname" . }}:{{ .Values.service.port }}"
+            - name: OLLAMA_MODELS
+              value: {{ .Values.persistence.models.mountPath | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+
+              echo "Waiting for Ollama server at $OLLAMA_HOST..."
+              until curl -sf "$OLLAMA_HOST/api/tags" > /dev/null 2>&1; do
+                echo "  ...not ready yet, retrying in 5s"
+                sleep 5
+              done
+              echo "Ollama is ready."
+
+              {{- range .Values.models.pull }}
+              echo "Pulling model: {{ . }}"
+              ollama pull {{ . }}
+              {{- end }}
+
+              {{- range .Values.models.create }}
+              echo "Creating model: {{ .name }}"
+              ollama create {{ .name }} -f /modelfiles/{{ .name }}.Modelfile
+              {{- end }}
+
+              {{- range .Values.models.run }}
+              echo "Preloading model: {{ . }}"
+              ollama run {{ . }} "" || true
+              {{- end }}
+
+              echo "All models loaded successfully."
+          resources:
+            {{- toYaml .Values.jobResources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.models.enabled }}
+            - name: ollama-models
+              mountPath: {{ .Values.persistence.models.mountPath }}
+            {{- end }}
+            {{- if .Values.models.create }}
+            - name: modelfiles
+              mountPath: /modelfiles
+            {{- end }}
+      volumes:
+        {{- if .Values.persistence.models.enabled }}
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.models.existingClaim | default (printf "%s-models" (include "ollama.fullname" .)) }}
+        {{- end }}
+        {{- if .Values.models.create }}
+        - name: modelfiles
+          configMap:
+            name: {{ include "ollama.fullname" . }}-modelfiles
+        {{- end }}
+{{- end }}

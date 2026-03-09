@@ -1,0 +1,34 @@
+podman:
+  machine_name: "podman-machine-default"
+  cpu: "8"
+  memory: "24576"
+  disk: "100"
+
+paths:
+  kind_config:    "./kind/kind-config.yaml"
+  n8n_chart:      "./helm/n8n"
+  ollama_chart:   "./helm/ollama"
+  ollama_dockerfile:  "./ollama/macos/Dockerfile"
+
+ollama:
+  image: "fedora-ollama-vulkan:v1"
+
+kind:
+  cluster_name: "ai-cluster"
+
+namespaces:
+  - n8n
+  - ollama
+
+helm:
+  releases:
+    - name:      "n8n"
+      chart:     "./helm/n8n"
+      namespace: "n8n"
+    - name:      "ollama"
+      chart:     "./helm/ollama"
+      namespace: "ollama"
+
+krunkit:
+  brew_tap: slp/krunkit
+  brew_pkg: slp/krunkit/krunkit

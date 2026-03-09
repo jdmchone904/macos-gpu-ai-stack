@@ -1,0 +1,109 @@
+# =============================================================================
+# Ollama Helm Chart Values
+# =============================================================================
+
+image:
+  repository: localhost/fedora-ollama-vulkan
+  tag: v1
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+models:
+  pull:
+    - llama3.2
+    - mistral
+    - gpt-oss:20b
+  create: []
+  run: []
+
+persistence:
+  data:
+    enabled: true
+    storageClass: "standard"
+    accessMode: ReadWriteOnce
+    size: 50Gi
+    existingClaim: ""
+    mountPath: /root/.ollama
+  models:
+    enabled: false
+    storageClass: "standard"
+    accessMode: ReadWriteOnce
+    size: 100Gi
+    existingClaim: ""
+    mountPath: /models
+
+service:
+  type: NodePort
+  port: 11434
+  nodePort: 30434
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ollama.example.com
+  tls: []
+
+resources:
+  requests:
+    cpu: 1000m
+    memory: 8Gi
+  limits:
+    cpu: 8000m
+    memory: 20Gi
+
+jobResources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+env:
+  OLLAMA_HOST: "0.0.0.0"
+  OLLAMA_MODELS: "/root/.ollama/models"
+  OLLAMA_DEBUG: "0"
+  OLLAMA_NUM_GPU: "999"
+  OLLAMA_NUM_CTX: "8192"
+  OLLAMA_NUM_THREAD: "8"
+  OLLAMA_FLASH_ATTENTION: "0"
+  GGML_VULKAN_DISABLE_ASYNC_COMPUTE: "1"
+  GGML_VULKAN_NO_ASYNC_COMPUTE: "1"
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  periodSeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 6
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+# Pod-level security context (applies to all containers in the pod)
+podSecurityContext:
+  supplementalGroups:
+    - 226   # render/video — matches device major number, works around missing group names
+
+# Container-level security context
+securityContext:
+  privileged: true
+  capabilities:
+    add:
+      - SYS_ADMIN
+      - MKNOD
+
+serviceAccount:
+  create: false
+  name: ""
