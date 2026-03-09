@@ -47,7 +47,7 @@ Adjust resources to match your machine. Recommended starting point:
 podman:
   machine_name: podman-machine-default
   cpu: 8
-  memory: 16384       # 16GB — reduce if you experience VM instability
+  memory: 16384       # 16GB — increase as needed, and reduce if you experience VM instability
   disk: 100
 
 krunkit:
@@ -77,7 +77,7 @@ helm:
     namespace: n8n
 ```
 
-> **Note on memory:** libkrun-efi can crash the VM under heavy memory pressure. If you experience instability, reduce `memory` in `config.yaml` and recreate the machine. 16384 (16GB) is a stable value on a 36GB host.
+> **Note on memory:** libkrun-efi can crash the VM under heavy memory pressure. If you experience instability, reduce `memory` in `config.yaml` and recreate the machine. 21943 (21.43GB) is a tested, stable value on a 36GB host.
 
 ### 3. Review kind-config.yaml
 Port mappings are set at cluster creation time and cannot be changed without recreating the cluster. Add all ports you need upfront:
