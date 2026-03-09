@@ -12,8 +12,9 @@ nodes:
     extraPortMappings:
     - containerPort: 30678    # n8n NodePort
       hostPort: 30678         # Access via localhost:30678
+      protocol: TCP
     - containerPort: 30434    # ollama NodePort
-      hostPort: 30434         # Access via localhost:30678
+      hostPort: 30434         # Access via localhost:30434
       protocol: TCP
     - containerPort: 80       # HTTP ingress
       hostPort: 8080          # Access via localhost:8080  
