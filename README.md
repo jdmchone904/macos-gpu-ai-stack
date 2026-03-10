@@ -292,7 +292,8 @@ models:
   pull:
     - llama3.2
     - mistral
-    - gpt-oss:20b
+    #- gemma3
+    #- gpt-oss:20b
 ```
 
 ### Adding or removing models

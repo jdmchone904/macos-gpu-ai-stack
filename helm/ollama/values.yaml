@@ -13,7 +13,7 @@ models:
   pull:
     - llama3.2
     - mistral
-    - gemma3
+    #- gemma3
     #- gpt-oss:20b
   create: []
   run: []
