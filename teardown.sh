@@ -68,7 +68,6 @@ uninstall_brew() {
 uninstall_brew "kind"
 uninstall_brew "helm"
 uninstall_brew "slp/krunkit/krunkit"
-uninstall_brew "slp/krunkit/libkrun-efi"
 uninstall_brew "podman"
 
 if brew list --cask podman-desktop &>/dev/null; then
