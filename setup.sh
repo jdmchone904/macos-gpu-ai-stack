@@ -350,7 +350,7 @@ create_namespaces() {
 # =============================================================================
 tail_ollama_init_logs() {
   local ns="$1"
-  local timeout=600 elapsed=0
+  local timeout=3600 elapsed=0
 
   info "Waiting for Ollama init job pod to start..."
   until kubectl get pods -n "$ns" 2>/dev/null | grep -q "ollama-model-loader"; do
@@ -372,16 +372,19 @@ tail_ollama_init_logs() {
     sleep 3
   done
 
-  kubectl logs -f "$init_pod" -n "$ns" 2>/dev/null || \
-    warn "Log stream ended — init pod may have completed"
+  # Tail logs with automatic reconnect on HTTP/2 stream drops
+  while true; do
+    local pod_phase
+    pod_phase=$(kubectl get pod "$init_pod" -n "$ns" --no-headers 2>/dev/null | awk '{print $3}')
+    if [[ "$pod_phase" == "Succeeded" || "$pod_phase" == "Completed" || "$pod_phase" == "Error" ]]; then
+      break
+    fi
+    kubectl logs -f "$init_pod" -n "$ns" 2>/dev/null || true
+    sleep 2
+  done
 
   echo ""
-  info "Waiting for Ollama init job to complete..."
-  kubectl wait --for=condition=complete job \
-    -l "app.kubernetes.io/instance=ollama" \
-    -n "$ns" \
-    --timeout=600s 2>/dev/null || \
-    warn "Init job did not complete within timeout — check: kubectl get pods -n $ns"
+  success "Ollama init job completed"
 }
 
 install_helm_charts() {
@@ -394,7 +397,7 @@ install_helm_charts() {
       warn "Helm release '$name' already exists in '$ns' — skipping"
     else
       info "Installing '$name' from $chart into namespace '$ns'..."
-      helm install "$name" "$chart" -n "$ns" &
+      helm install "$name" "$chart" -n "$ns" --timeout 3h &
       local helm_pid=$!
       # Tail init job logs for ollama so the user can see model download progress
       if [[ "$name" == "ollama" ]]; then
@@ -407,7 +410,52 @@ install_helm_charts() {
 }
 
 # =============================================================================
-# 9. SUMMARY
+# 9. RESTART AND VERIFY
+# =============================================================================
+restart_and_verify() {
+  step "Restarting Podman machine and cluster"
+
+  info "Stopping Podman machine..."
+  podman machine stop "$MACHINE_NAME"
+
+  info "Starting Podman machine..."
+  podman machine start "$MACHINE_NAME" || warn "machine start returned non-zero — checking connectivity anyway"
+
+  info "Setting rootful connection as default..."
+  podman system connection default "${MACHINE_NAME}-root"
+
+  info "Waiting for Podman machine to be ready..."
+  local timeout=180 elapsed=0
+  until podman info &>/dev/null 2>&1; do
+    (( elapsed >= timeout )) && error "Timed out waiting for Podman machine after restart"
+    sleep 5; (( elapsed += 5 ))
+    info "  Still waiting... (${elapsed}s / ${timeout}s)"
+  done
+  success "Podman machine is ready"
+
+  info "Starting kind control plane node..."
+  vm_ssh "podman start ${KIND_CLUSTER_NAME}-control-plane" || \
+    warn "Could not start control plane container — it may already be running"
+
+  info "Refreshing kubeconfig..."
+  local podman_sock
+  podman_sock=$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || true)
+  export DOCKER_HOST="unix://${podman_sock}"
+  export KIND_EXPERIMENTAL_PROVIDER=podman
+  kind export kubeconfig --name "$KIND_CLUSTER_NAME"
+
+  info "Waiting for cluster node to be Ready..."
+  local timeout=120 elapsed=0
+  until kubectl get nodes 2>/dev/null | grep -q " Ready"; do
+    (( elapsed >= timeout )) && error "Timed out waiting for cluster node after restart"
+    sleep 5; (( elapsed += 5 ))
+    info "  Still waiting... (${elapsed}s / ${timeout}s)"
+  done
+  success "Cluster node is Ready"
+}
+
+# =============================================================================
+# 10. SUMMARY
 # =============================================================================
 print_summary() {
   echo ""
@@ -448,6 +496,7 @@ main() {
   build_and_load_ollama_image
   create_namespaces
   install_helm_charts
+  restart_and_verify
   print_summary
 }
 

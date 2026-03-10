@@ -109,6 +109,8 @@ nodes:
 /opt/homebrew/bin/bash setup.sh
 ```
 
+> **Note:** During initial setup, only smaller models (7B and under) are pulled by default. Large models such as `gpt-oss:20b` are commented out in `helm/ollama/values.yaml` to prevent the setup from hanging on a long download. Add them after setup is complete via `helm upgrade` — see [Managing Ollama Models](#managing-ollama-models).
+
 The script will:
 1. Install Podman, kind, helm, krunkit, and libkrun-efi via Homebrew
 2. Create and start the Podman VM with GPU passthrough enabled
@@ -249,11 +251,21 @@ models:
 
 ### Adding or removing models
 Edit `helm/ollama/values.yaml` and update the list, then upgrade the Helm release:
-```bash
-helm upgrade ollama ./helm/ollama -n ollama
+```yaml
+models:
+  pull:
+    - llama3.2
+    - mistral
+    - gemma3
+    #- gpt-oss:20b   # large models — add after initial setup via helm upgrade
 ```
 
-The `ollama-model-loader` job will run and pull any new models. Already-downloaded models are skipped.
+> **Recommendation:** During initial setup, only include smaller models (7B and under) in the `models.pull` list. Large models like `gpt-oss:20b` can cause the setup script to hang waiting for the download to complete. Instead, comment them out during setup and add them afterwards via `helm upgrade`:
+
+```bash
+# After setup is complete, uncomment the large model in values.yaml then run:
+helm upgrade ollama ./helm/ollama -n ollama
+```
 
 ### Pulling from HuggingFace directly
 Use the `hf.co/` prefix to pull a model directly from HuggingFace:
