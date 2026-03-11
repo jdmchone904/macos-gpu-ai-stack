@@ -1,16 +1,16 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "llama-cpp.name" -}}
+{{- define "llamacpp.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
+Since release name and chart name are both "llamacpp", the contains check
+below ensures we get plain "llamacpp" rather than "llamacpp-llamacpp".
 */}}
-{{- define "llama-cpp.fullname" -}}
+{{- define "llamacpp.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,18 +24,18 @@ If release name contains chart name it will be used as a full name.
 {{- end }}
 
 {{/*
-Create chart name and version as used by the chart label.
+Chart label
 */}}
-{{- define "llama-cpp.chart" -}}
+{{- define "llamacpp.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "llama-cpp.labels" -}}
-helm.sh/chart: {{ include "llama-cpp.chart" . }}
-{{ include "llama-cpp.selectorLabels" . }}
+{{- define "llamacpp.labels" -}}
+helm.sh/chart: {{ include "llamacpp.chart" . }}
+{{ include "llamacpp.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,18 +45,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "llama-cpp.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "llama-cpp.name" . }}
+{{- define "llamacpp.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "llamacpp.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end }}
-
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "llama-cpp.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "llama-cpp.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
 {{- end }}

@@ -1,0 +1,132 @@
+image:
+  repository: localhost/fedora-llamacpp-vulkan
+  tag: v1
+  pullPolicy: Never
+
+replicaCount: 1
+
+# ── Service ──────────────────────────────────────────────────────────────────
+service:
+  type: NodePort
+  port: 8080
+  nodePort: 30480     # matches kind-config.yaml extraPortMappings
+
+# ── Persistence ──────────────────────────────────────────────────────────────
+persistence:
+  enabled: true
+  storageClass: "standard"
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+# ── Models ───────────────────────────────────────────────────────────────────
+# All models are downloaded by the init job and stored on the PVC.
+# llama-server serves from the models directory — no model is pre-loaded.
+# Clients specify the model per request via the "model" field.
+# The first entry in the list is used as the default model if the client
+# does not specify one.
+models:
+  - name: "gpt-oss-20b"
+    hf_repo: "bartowski/openai_gpt-oss-20b-GGUF"
+    filename: "openai_gpt-oss-20b-MXFP4.gguf"
+  - name: "mistral-7b"
+    hf_repo: "bartowski/Mistral-7B-Instruct-v0.3-GGUF"
+    filename: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+  # - name: "gemma3-4b"
+  #   hf_repo: "bartowski/google_gemma-3-4b-it-GGUF"
+  #   filename: "google_gemma-3-4b-it-Q4_K_M.gguf"
+  # - name: "llama3.2-3b"
+  #   hf_repo: "bartowski/Llama-3.2-3B-Instruct-GGUF"
+  #   filename: "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+
+# Download timeout per model in seconds
+modelTimeoutSeconds: 3600
+modelDownloadBackoffLimit: 3
+
+# ── llama-server flags ────────────────────────────────────────────────────────
+# These are passed directly as CLI args to llama-server in deployment.yaml.
+# Renamed gpu_layers → gpuLayers / context_size → contextSize to match
+# the Go-style camelCase used in the deployment template.
+server:
+  gpuLayers: 999      # --n-gpu-layers  (999 = offload all layers to GPU)
+  contextSize: 8192   # --ctx-size
+  threads: 8          # --threads (CPU threads for non-GPU work)
+
+# ── Extra environment variables ───────────────────────────────────────────────
+# Rendered as `range $key, $val` in deployment.yaml — must be a map, not a
+# list. GGML_VK_DEVICE and the Vulkan async-compute flags are set directly in
+# the Dockerfile and deployment template; add overrides here if needed.
+env: {}
+# env:
+#   MY_CUSTOM_VAR: "value"
+
+# ── Resources ────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "1000m"
+    memory: "2Gi"
+  limits:
+    cpu: "8000m"
+    memory: "20Gi"
+
+# Resources for the model-downloader Job (curl only, no inference)
+jobResources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+# ── Security ─────────────────────────────────────────────────────────────────
+podSecurityContext:
+  # GIDs 44 (video) and 226 (render) match the groupmod in the Dockerfile.
+  # supplementalGroups gives the container process membership of these groups
+  # so it can open /dev/dri devices after fix-dri-permissions runs.
+  supplementalGroups: [44, 226]
+
+securityContext:
+  privileged: true
+  capabilities:
+    add:
+      - SYS_ADMIN
+
+serviceAccount:
+  create: false
+  name: ""
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+startupProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  # 20 × 30s = 10 minutes — enough time for a large model to load into VRAM
+  failureThreshold: 20
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# --log-verbosity levels: 0=errors only, 1=warnings, 2=info, 3=debug
+log:
+  verbosity: "0"
+
+# ── Scheduling (optional) ────────────────────────────────────────────────────
+podAnnotations: {}
+nodeSelector: {}
+affinity: {}
+tolerations: []

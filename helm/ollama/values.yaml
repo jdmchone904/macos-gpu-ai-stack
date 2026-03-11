@@ -14,7 +14,7 @@ models:
     - llama3.2
     - mistral
     #- gemma3
-    - gpt-oss:20b
+    # - gpt-oss:20b
   create: []
   run: []
   timeout: 7200

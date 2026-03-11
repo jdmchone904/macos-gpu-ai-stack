@@ -27,7 +27,7 @@ step()    { echo -e "\n${BOLD}==> $*${RESET}"; }
 vm_ssh() {
   local ssh_key port
   ssh_key=$(podman machine inspect "$MACHINE_NAME" --format '{{.SSHConfig.IdentityPath}}')
-  port=$(podman machine inspect "$MACHINE_NAME" --format '{{.SSHConfig.Port}}')
+  port=$(podman machine inspect "$MACHINE_NAME"    --format '{{.SSHConfig.Port}}')
   ssh -i "$ssh_key" -p "$port" \
       -o StrictHostKeyChecking=no \
       -o LogLevel=ERROR \
@@ -37,11 +37,14 @@ vm_ssh() {
 # =============================================================================
 # 1. CONFIG LOADING
 # =============================================================================
+
+# get_yaml_value FILE SECTION KEY
+# Reads a scalar value under a two-level key: <section>:\n  <key>: <value>
 get_yaml_value() {
   local file="$1" section="$2" key="$3"
   awk -v section="$section" -v key="$key" '
-    $0 ~ "^"section":" { in_section=1; next }
-    in_section && /^[a-zA-Z]/ { in_section=0 }
+    $0 ~ "^"section":"          { in_section=1; next }
+    in_section && /^[a-zA-Z]/  { in_section=0 }
     in_section && $0 ~ "^[[:space:]]+"key":" {
       sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "")
       gsub(/"/, "")
@@ -50,11 +53,15 @@ get_yaml_value() {
   ' "$file"
 }
 
+# get_yaml_list FILE TOP_KEY
+# Reads a top-level list:
+#   top_key:
+#     - value
 get_yaml_list() {
   local file="$1" key="$2"
   awk -v key="$key" '
-    $0 ~ "^"key":" { found=1; next }
-    found && /^[a-zA-Z]/ { exit }
+    $0 ~ "^"key":"              { found=1; next }
+    found && /^[a-zA-Z]/       { exit }
     found && /^[[:space:]]*-[[:space:]]/ {
       sub(/^[[:space:]]*-[[:space:]]*/, "")
       gsub(/"/, "")
@@ -63,39 +70,129 @@ get_yaml_list() {
   ' "$file"
 }
 
+# load_helm_releases FILE
+# Parses the helm.releases[] list:
+#   helm:
+#     releases:
+#       - name:      foo
+#         chart:     ./helm/foo
+#         namespace: foo
 load_helm_releases() {
   local file="$1"
   HELM_NAMES=(); HELM_CHARTS=(); HELM_NAMESPACES=()
-  local names charts namespaces
-  names=$(awk '/^helm:/{found=1} found && /name:/{ gsub(/^[^:]+:[[:space:]]*/,""); gsub(/"/,""); gsub(/[[:space:]]/,""); print}' "$file")
-  charts=$(awk '/^helm:/{found=1} found && /chart:/{ gsub(/^[^:]+:[[:space:]]*/,""); gsub(/"/,""); gsub(/[[:space:]]/,""); print}' "$file")
-  namespaces=$(awk '/^helm:/{found=1} found && /namespace:/{ gsub(/^[^:]+:[[:space:]]*/,""); gsub(/"/,""); gsub(/[[:space:]]/,""); print}' "$file")
-  mapfile -t HELM_NAMES      <<< "$names"
-  mapfile -t HELM_CHARTS_REL <<< "$charts"
-  mapfile -t HELM_NAMESPACES <<< "$namespaces"
-  HELM_CHARTS=()
-  for c in "${HELM_CHARTS_REL[@]}"; do
-    HELM_CHARTS+=("$SCRIPT_DIR/$c")
+
+  # Use awk for robust parsing — avoids bash regex edge cases with hyphens
+  # and indentation inconsistencies in the helm.releases block.
+  local parsed
+  parsed=$(awk '
+    /^helm:/        { in_helm=1; next }
+    in_helm && /^[a-zA-Z]/ && !/^[[:space:]]/ { in_helm=0; in_rel=0; next }
+    in_helm && /releases:/ { in_rel=1; next }
+    in_rel && /^[[:space:]]+-[[:space:]]*$/ {
+      # bare dash line — next keys belong to this entry
+      if (name != "") print name "|" chart "|" ns
+      name=""; chart=""; ns=""
+      next
+    }
+    in_rel && /^[[:space:]]+-[[:space:]]+name:/ {
+      if (name != "") print name "|" chart "|" ns
+      name=""; chart=""; ns=""
+      sub(/.*name:[[:space:]]*/, ""); gsub(/"/, ""); name=$0; next
+    }
+    in_rel && /^[[:space:]]+name:/ {
+      sub(/.*name:[[:space:]]*/, ""); gsub(/"/, ""); name=$0; next
+    }
+    in_rel && /^[[:space:]]+-[[:space:]]+chart:/ {
+      sub(/.*chart:[[:space:]]*/, ""); gsub(/"/, ""); chart=$0; next
+    }
+    in_rel && /^[[:space:]]+chart:/ {
+      sub(/.*chart:[[:space:]]*/, ""); gsub(/"/, ""); chart=$0; next
+    }
+    in_rel && /^[[:space:]]+-[[:space:]]+namespace:/ {
+      sub(/.*namespace:[[:space:]]*/, ""); gsub(/"/, ""); ns=$0; next
+    }
+    in_rel && /^[[:space:]]+namespace:/ {
+      sub(/.*namespace:[[:space:]]*/, ""); gsub(/"/, ""); ns=$0; next
+    }
+    END { if (name != "") print name "|" chart "|" ns }
+  ' "$file")
+
+  while IFS='|' read -r name chart ns; do
+    [[ -z "$name" ]] && continue
+    HELM_NAMES+=("$name")
+    HELM_CHARTS+=("$SCRIPT_DIR/$chart")
+    HELM_NAMESPACES+=("$ns")
+  done <<< "$parsed"
+
+  # Debug: show what was parsed so namespace issues are immediately visible
+  for i in "${!HELM_NAMES[@]}"; do
+    info "  Helm release parsed: name=${HELM_NAMES[$i]} ns=${HELM_NAMESPACES[$i]} chart=${HELM_CHARTS[$i]}"
   done
+}
+
+# prompt_backends
+# Interactively ask which backend to enable, overriding config.yaml.
+# Default (just pressing Enter) is llamacpp only.
+prompt_backends() {
+  echo ""
+  echo -e "${BOLD}  Which inference backend would you like to install?${RESET}"
+  echo -e "  ${CYAN}1)${RESET} llama.cpp  ${CYAN}[default]${RESET}"
+  echo -e "  ${CYAN}2)${RESET} Ollama"
+  echo ""
+  read -r -p "  Enter choice [1]: " choice
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      ENABLED_BACKENDS=("llamacpp")
+      info "Installing: llama.cpp"
+      ;;
+    2)
+      ENABLED_BACKENDS=("ollama")
+      info "Installing: Ollama"
+      ;;
+    *)
+      warn "Invalid choice '$choice' — defaulting to llama.cpp"
+      ENABLED_BACKENDS=("llamacpp")
+      ;;
+  esac
+  echo ""
+}
+
+# Override backend_enabled to use the interactively chosen set
+# instead of (or in addition to) what's in config.yaml.
+backend_enabled() {
+  local target="$1"
+  for b in "${ENABLED_BACKENDS[@]}"; do
+    [[ "$b" == "$target" ]] && return 0
+  done
+  return 1
 }
 
 load_config() {
   [[ -f "$CONFIG_FILE" ]] || error "Config file not found at: $CONFIG_FILE"
   info "Loading config from: $CONFIG_FILE"
 
-  MACHINE_NAME=$(get_yaml_value  "$CONFIG_FILE" "podman"  "machine_name")
-  MACHINE_CPU=$(get_yaml_value   "$CONFIG_FILE" "podman"  "cpu")
-  MACHINE_MEM=$(get_yaml_value   "$CONFIG_FILE" "podman"  "memory")
-  MACHINE_DISK=$(get_yaml_value  "$CONFIG_FILE" "podman"  "disk")
+  MACHINE_NAME=$(get_yaml_value "$CONFIG_FILE" "podman"  "machine_name")
+  MACHINE_CPU=$( get_yaml_value "$CONFIG_FILE" "podman"  "cpu")
+  MACHINE_MEM=$( get_yaml_value "$CONFIG_FILE" "podman"  "memory")
+  MACHINE_DISK=$(get_yaml_value "$CONFIG_FILE" "podman"  "disk")
 
-  KIND_CONFIG="$SCRIPT_DIR/$(get_yaml_value       "$CONFIG_FILE" "paths"  "kind_config")"
-  OLLAMA_DOCKERFILE="$SCRIPT_DIR/$(get_yaml_value "$CONFIG_FILE" "paths"  "ollama_dockerfile")"
+  KIND_CONFIG="$SCRIPT_DIR/$(get_yaml_value "$CONFIG_FILE" "paths" "kind_config")"
 
   KIND_CLUSTER_NAME=$(get_yaml_value "$CONFIG_FILE" "kind"    "cluster_name")
-  OLLAMA_IMAGE=$(get_yaml_value      "$CONFIG_FILE" "ollama"  "image")
-  KRUNKIT_TAP=$(get_yaml_value       "$CONFIG_FILE" "krunkit" "brew_tap")
-  KRUNKIT_PKG=$(get_yaml_value       "$CONFIG_FILE" "krunkit" "brew_pkg")
+  KRUNKIT_TAP=$(      get_yaml_value "$CONFIG_FILE" "krunkit" "brew_tap")
+  KRUNKIT_PKG=$(      get_yaml_value "$CONFIG_FILE" "krunkit" "brew_pkg")
 
+  # Always load both backend configs so paths are available regardless of
+  # what the user selects at the prompt. backend_enabled() gates actual use.
+  OLLAMA_IMAGE=$(get_yaml_value "$CONFIG_FILE" "ollama" "image")
+  OLLAMA_DOCKERFILE="$SCRIPT_DIR/$(get_yaml_value "$CONFIG_FILE" "paths" "ollama_dockerfile")"
+
+  LLAMACPP_IMAGE=$(get_yaml_value "$CONFIG_FILE" "llamacpp" "image")
+  LLAMACPP_DOCKERFILE="$SCRIPT_DIR/$(get_yaml_value "$CONFIG_FILE" "paths" "llamacpp_dockerfile")"
+
+  # --- Namespaces & Helm releases --------------------------------------------
   NAMESPACES=()
   while IFS= read -r line; do
     [[ -n "$line" ]] && NAMESPACES+=("$line")
@@ -103,13 +200,17 @@ load_config() {
 
   load_helm_releases "$CONFIG_FILE"
 
+  # --- Validate required fields ---------------------------------------------
   local missing=()
-  [[ -z "$MACHINE_NAME"      ]] && missing+=("podman.machine_name")
-  [[ -z "$MACHINE_CPU"       ]] && missing+=("podman.cpu")
-  [[ -z "$MACHINE_MEM"       ]] && missing+=("podman.memory")
-  [[ -z "$MACHINE_DISK"      ]] && missing+=("podman.disk")
-  [[ -z "$KIND_CLUSTER_NAME" ]] && missing+=("kind.cluster_name")
-  [[ -z "$OLLAMA_IMAGE"      ]] && missing+=("ollama.image")
+  [[ -z "$MACHINE_NAME"        ]] && missing+=("podman.machine_name")
+  [[ -z "$MACHINE_CPU"         ]] && missing+=("podman.cpu")
+  [[ -z "$MACHINE_MEM"         ]] && missing+=("podman.memory")
+  [[ -z "$MACHINE_DISK"        ]] && missing+=("podman.disk")
+  [[ -z "$KIND_CLUSTER_NAME"   ]] && missing+=("kind.cluster_name")
+  [[ -z "$OLLAMA_IMAGE"        ]] && missing+=("ollama.image")
+  [[ -z "$OLLAMA_DOCKERFILE"   ]] && missing+=("paths.ollama_dockerfile")
+  [[ -z "$LLAMACPP_IMAGE"      ]] && missing+=("llamacpp.image")
+  [[ -z "$LLAMACPP_DOCKERFILE" ]] && missing+=("paths.llamacpp_dockerfile")
   [[ ${#missing[@]} -gt 0 ]] && error "Config missing required fields: ${missing[*]}"
 
   success "Config loaded"
@@ -117,7 +218,8 @@ load_config() {
   info "  Cluster:    $KIND_CLUSTER_NAME"
   info "  Namespaces: ${NAMESPACES[*]}"
   info "  Helm:       ${HELM_NAMES[*]}"
-  info "  Ollama:     $OLLAMA_IMAGE"
+  [[ -n "$OLLAMA_IMAGE"   ]] && info "  Ollama:     $OLLAMA_IMAGE"
+  [[ -n "$LLAMACPP_IMAGE" ]] && info "  llama.cpp:  $LLAMACPP_IMAGE ($LLAMACPP_DOCKERFILE)"
 }
 
 # =============================================================================
@@ -127,14 +229,29 @@ check_prerequisites() {
   step "Checking prerequisites"
   command -v brew &>/dev/null || error "Homebrew not found. Install from https://brew.sh"
   success "Homebrew found"
-  [[ -f "$KIND_CONFIG"       ]] || error "kind config not found at $KIND_CONFIG"
+
+  [[ -f "$KIND_CONFIG" ]] || error "kind config not found at $KIND_CONFIG"
   success "kind config found: $KIND_CONFIG"
-  [[ -f "$OLLAMA_DOCKERFILE" ]] || error "Ollama Dockerfile not found at $OLLAMA_DOCKERFILE"
-  success "Ollama Dockerfile found: $OLLAMA_DOCKERFILE"
+
+  if backend_enabled "ollama"; then
+    [[ -f "$OLLAMA_DOCKERFILE" ]] || error "Ollama Dockerfile not found at $OLLAMA_DOCKERFILE"
+    success "Ollama Dockerfile found: $OLLAMA_DOCKERFILE"
+  fi
+
+  if backend_enabled "llamacpp"; then
+    [[ -f "$LLAMACPP_DOCKERFILE" ]] || \
+      error "llama.cpp Dockerfile not found at $LLAMACPP_DOCKERFILE"
+    success "llama.cpp Dockerfile found: $LLAMACPP_DOCKERFILE"
+  fi
+
   for i in "${!HELM_NAMES[@]}"; do
+    # Skip chart existence check for backends that are not enabled
+    local name="${HELM_NAMES[$i]}"
+    if [[ "$name" == "ollama"   ]] && ! backend_enabled "ollama";   then continue; fi
+    if [[ "$name" == "llamacpp" ]] && ! backend_enabled "llamacpp"; then continue; fi
     [[ -d "${HELM_CHARTS[$i]}" ]] || \
-      error "Helm chart '${HELM_NAMES[$i]}' not found at ${HELM_CHARTS[$i]}"
-    success "Helm chart found: ${HELM_NAMES[$i]} → ${HELM_CHARTS[$i]}"
+      error "Helm chart '$name' not found at ${HELM_CHARTS[$i]}"
+    success "Helm chart found: $name → ${HELM_CHARTS[$i]}"
   done
 }
 
@@ -154,7 +271,8 @@ install_brew_pkg() {
 install_tools() {
   step "Installing required tools"
 
-  # Install krunkit FIRST — Podman detects it at install time and defaults to libkrun provider
+  # Install krunkit FIRST — Podman detects it at install time and defaults to
+  # libkrun provider which is required for GPU passthrough.
   if command -v krunkit &>/dev/null; then
     warn "krunkit already installed — skipping"
   else
@@ -177,19 +295,16 @@ setup_podman_machine() {
   step "Setting up Podman machine"
 
   if podman machine list --format '{{.Name}}' 2>/dev/null | sed 's/\*$//' | grep -q "^${MACHINE_NAME}$"; then
-    # Verify existing machine is using libkrun
     local config_dir
-    config_dir=$(podman machine inspect "$MACHINE_NAME" 2>/dev/null | grep -i '"Path"' | head -1 | tr -d ' ",' | cut -d: -f2)
+    config_dir=$(podman machine inspect "$MACHINE_NAME" 2>/dev/null \
+      | grep -i '"Path"' | head -1 | tr -d ' ",' | cut -d: -f2)
     if echo "$config_dir" | grep -q "applehv"; then
-      error "Podman machine '$MACHINE_NAME' exists but uses applehv instead of libkrun (no GPU passthrough). Remove it and re-run:
-       podman machine stop $MACHINE_NAME
-       podman machine rm $MACHINE_NAME
+      error "Podman machine '$MACHINE_NAME' uses applehv (no GPU passthrough). Remove it and re-run:
+       podman machine stop $MACHINE_NAME && podman machine rm $MACHINE_NAME
        /opt/homebrew/bin/bash setup.sh"
     fi
     warn "Podman machine '$MACHINE_NAME' already exists — skipping init"
   else
-    # Ensure libkrun is set as the provider before init
-    # Without this, Podman may default to applehv which does not expose /dev/dri
     local containers_conf="$HOME/.config/containers/containers.conf"
     if [[ ! -f "$containers_conf" ]] || ! grep -q "provider.*libkrun" "$containers_conf"; then
       info "Configuring Podman to use libkrun provider..."
@@ -220,15 +335,14 @@ EOF
     podman machine start "$MACHINE_NAME" || warn "machine start returned non-zero — checking connectivity anyway"
   fi
 
-  # Always use the rootful connection so kind can create privileged containers
   info "Setting rootful connection as default..."
   podman system connection default "${MACHINE_NAME}-root" 2>/dev/null || \
     error "Could not set rootful connection '${MACHINE_NAME}-root'. Run: podman system connection list"
 
-  # Verify we are actually rootful before continuing
   local rootless
   rootless=$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || echo "unknown")
-  [[ "$rootless" == "false" ]] || error "Podman is still running rootless — cannot continue. Check: podman system connection list"
+  [[ "$rootless" == "false" ]] || \
+    error "Podman is still running rootless. Check: podman system connection list"
   success "Podman is running rootful"
 
   info "Waiting for Podman machine to be ready..."
@@ -247,7 +361,6 @@ EOF
 setup_kind_cluster() {
   step "Setting up kind cluster"
 
-  # Use the rootful Podman socket — kind runs from the Mac terminal directly
   local podman_sock
   podman_sock=$(podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null || true)
   [[ -n "$podman_sock" ]] || error "Could not determine Podman socket path"
@@ -275,59 +388,76 @@ setup_kind_cluster() {
 }
 
 # =============================================================================
-# 6. BUILD AND LOAD OLLAMA IMAGE
+# 6. BUILD AND LOAD IMAGES
 # =============================================================================
-build_and_load_ollama_image() {
-  step "Building and loading Ollama image"
 
-  local image_name="${OLLAMA_IMAGE%%:*}"
-  local image_tag="${OLLAMA_IMAGE##*:}"
+# build_and_load_image IMAGE DOCKERFILE LABEL
+# Shared logic for any backend image: copy context into VM, build with
+# --device /dev/dri (needed for the COPR Mesa downgrade step in the
+# Dockerfiles to detect the correct GPU driver), save to tar, load into kind.
+build_and_load_image() {
+  local image="$1" dockerfile="$2" label="$3"
+  local image_name="${image%%:*}"
+  local image_tag="${image##*:}"
   local vm_tar="/root/tmp/${image_name}-${image_tag}.tar"
-  local vm_build_dir="/root/tmp/ollama-build"
+  local vm_build_dir="/root/tmp/${image_name}-build"
 
   vm_ssh "mkdir -p /root/tmp"
 
-  # Check if already loaded in kind node
+  # Check if already loaded into the kind node
   local already_loaded
   already_loaded=$(vm_ssh "podman exec ${KIND_CLUSTER_NAME}-control-plane \
     crictl images 2>/dev/null | grep -c '${image_name}'" || echo "0")
   if [[ "${already_loaded:-0}" -gt 0 ]]; then
-    warn "Image '$OLLAMA_IMAGE' already loaded in kind — skipping"
+    warn "Image '$image' already loaded in kind — skipping ($label)"
     return 0
   fi
 
-  [[ -f "$OLLAMA_DOCKERFILE" ]] || error "Ollama Dockerfile not found at $OLLAMA_DOCKERFILE"
+  [[ -f "$dockerfile" ]] || error "$label Dockerfile not found at $dockerfile"
 
-  # Copy build context into VM
-  info "Copying Dockerfile context into VM..."
+  # The build context is the Dockerfile's directory so COPY instructions
+  # (e.g. llama_tps_test.sh, patch_vulkan.py, patch_cmake.py) resolve correctly.
+  local build_context
+  build_context="$(dirname "$dockerfile")"
+
+  info "Copying $label build context into VM ($build_context)..."
   vm_ssh "mkdir -p $vm_build_dir"
-  tar -C "$(dirname "$OLLAMA_DOCKERFILE")" -cf - . | \
+  tar -C "$build_context" -cf - . | \
     vm_ssh "tar -C $vm_build_dir -xf -"
-  success "Build context copied to VM"
+  success "$label build context copied to VM"
 
-  # Build inside VM (where /dev/dri exists)
-  info "Building '$OLLAMA_IMAGE' inside VM..."
+  # Build inside the VM where /dev/dri exists. The Ollama Dockerfile needs
+  # this for the Mesa COPR downgrade; the llama.cpp Dockerfile does too.
+  info "Building '$image' inside VM ($label) — this may take 10-20 minutes..."
   vm_ssh "podman build --device /dev/dri \
-    -f ${vm_build_dir}/$(basename "$OLLAMA_DOCKERFILE") \
-    -t $OLLAMA_IMAGE \
-    $vm_build_dir" || error "Failed to build Ollama image"
-  success "Image '$OLLAMA_IMAGE' built"
+    -f ${vm_build_dir}/$(basename "$dockerfile") \
+    -t ${image} \
+    ${vm_build_dir}" || error "Failed to build $label image"
+  success "Image '$image' built ($label)"
 
-  # Save inside VM
-  info "Saving image to tar inside VM..."
-  vm_ssh "podman save -o $vm_tar $OLLAMA_IMAGE" || error "Failed to save image"
-  success "Image saved to $vm_tar inside VM"
+  info "Saving $label image to tar inside VM..."
+  vm_ssh "podman save -o ${vm_tar} ${image}" || error "Failed to save $label image"
+  success "$label image saved to ${vm_tar} inside VM"
 
-  # Load into kind node
-  info "Loading image into kind cluster..."
-  vm_ssh "podman cp $vm_tar ${KIND_CLUSTER_NAME}-control-plane:/tmp/ && \
+  info "Loading $label image into kind cluster..."
+  vm_ssh "podman cp ${vm_tar} ${KIND_CLUSTER_NAME}-control-plane:/tmp/ && \
     podman exec ${KIND_CLUSTER_NAME}-control-plane \
-    ctr -n k8s.io images import /tmp/$(basename $vm_tar) && \
+      ctr -n k8s.io images import /tmp/$(basename "${vm_tar}") && \
     podman exec ${KIND_CLUSTER_NAME}-control-plane \
-    rm -f /tmp/$(basename $vm_tar)" || error "Failed to load image into kind"
-  success "Image '$OLLAMA_IMAGE' loaded into kind cluster"
+      rm -f /tmp/$(basename "${vm_tar}")" || error "Failed to load $label image into kind"
+  success "Image '$image' loaded into kind cluster ($label)"
 
-  vm_ssh "rm -f $vm_tar"
+  vm_ssh "rm -f ${vm_tar}"
+}
+
+build_and_load_ollama_image() {
+  step "Building and loading Ollama image"
+  build_and_load_image "$OLLAMA_IMAGE" "$OLLAMA_DOCKERFILE" "Ollama"
+}
+
+build_and_load_llamacpp_image() {
+  step "Building and loading llama.cpp image"
+  build_and_load_image "$LLAMACPP_IMAGE" "$LLAMACPP_DOCKERFILE" "llama.cpp"
 }
 
 # =============================================================================
@@ -348,31 +478,36 @@ create_namespaces() {
 # =============================================================================
 # 8. HELM INSTALLS
 # =============================================================================
-tail_ollama_init_logs() {
-  local ns="$1"
+
+# tail_init_logs NAMESPACE POD_PREFIX LABEL
+# Follows the model-loader Job pod logs until the job completes.
+# Reconnects automatically on HTTP/2 stream drops.
+tail_init_logs() {
+  local ns="$1" pod_prefix="$2" label="$3"
   local timeout=3600 elapsed=0
 
-  info "Waiting for Ollama init job pod to start..."
-  until kubectl get pods -n "$ns" 2>/dev/null | grep -q "ollama-model-loader"; do
-    (( elapsed >= timeout )) && warn "Timed out waiting for Ollama init pod — skipping log tail" && return 0
+  info "Waiting for $label init job pod to start..."
+  until kubectl get pods -n "$ns" 2>/dev/null | grep -q "$pod_prefix"; do
+    (( elapsed >= timeout )) && \
+      warn "Timed out waiting for $label init pod — skipping log tail" && return 0
     sleep 5; (( elapsed += 5 ))
-    info "  Still waiting for init pod... (${elapsed}s / ${timeout}s)"
+    info "  Still waiting for $label init pod... (${elapsed}s / ${timeout}s)"
   done
 
   local init_pod
-  init_pod=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep "ollama-model-loader" | awk '{print $1}' | head -1)
-  [[ -z "$init_pod" ]] && warn "Could not find Ollama init pod — skipping log tail" && return 0
+  init_pod=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+    | grep "$pod_prefix" | awk '{print $1}' | head -1)
+  [[ -z "$init_pod" ]] && \
+    warn "Could not find $label init pod — skipping log tail" && return 0
 
-  info "Tailing Ollama init pod logs: $init_pod"
+  info "Tailing $label init pod logs: $init_pod"
   info "  (This may take several minutes depending on model size and internet speed)"
   echo ""
 
-  # Wait for pod to be running or completed before tailing
   until kubectl get pod "$init_pod" -n "$ns" 2>/dev/null | grep -qE "Running|Completed|Error"; do
     sleep 3
   done
 
-  # Tail logs with automatic reconnect on HTTP/2 stream drops
   while true; do
     local pod_phase
     pod_phase=$(kubectl get pod "$init_pod" -n "$ns" --no-headers 2>/dev/null | awk '{print $3}')
@@ -384,7 +519,7 @@ tail_ollama_init_logs() {
   done
 
   echo ""
-  success "Ollama init job completed"
+  success "$label init job completed"
 }
 
 install_helm_charts() {
@@ -393,19 +528,56 @@ install_helm_charts() {
     local name="${HELM_NAMES[$i]}"
     local chart="${HELM_CHARTS[$i]}"
     local ns="${HELM_NAMESPACES[$i]}"
+
+    # Skip backend charts whose backend is not enabled
+    if [[ "$name" == "ollama"   ]] && ! backend_enabled "ollama";   then
+      info "Skipping Helm release '$name' — ollama not selected"
+      continue
+    fi
+    if [[ "$name" == "llamacpp" ]] && ! backend_enabled "llamacpp"; then
+      info "Skipping Helm release '$name' — llamacpp not selected"
+      continue
+    fi
+
     if helm status "$name" -n "$ns" &>/dev/null; then
       warn "Helm release '$name' already exists in '$ns' — skipping"
-    else
-      info "Installing '$name' from $chart into namespace '$ns'..."
-      helm install "$name" "$chart" -n "$ns" --timeout 3h &
-      local helm_pid=$!
-      # Tail init job logs for ollama so the user can see model download progress
-      if [[ "$name" == "ollama" ]]; then
-        tail_ollama_init_logs "$ns"
-      fi
-      wait "$helm_pid" || error "Helm install failed for '$name'"
-      success "Helm release '$name' installed"
+      continue
     fi
+
+    info "Installing '$name' from $chart into namespace '$ns'..."
+    helm install "$name" "$chart" -n "$ns" --timeout 3h \
+      2>"/tmp/helm_err_${name}" &
+    local helm_pid=$!
+
+    # Give Helm a few seconds to fail fast on manifest errors (port conflicts,
+    # invalid resources, etc.) before we start tailing logs for pods that
+    # will never appear.
+    sleep 5
+    if ! kill -0 "$helm_pid" 2>/dev/null; then
+      # Process already exited — capture its exit code now before tailing,
+      # otherwise a second wait below returns 127 (already reaped) and the
+      # script exits even on success.
+      local helm_exit=0
+      wait "$helm_pid" || helm_exit=$?
+      if [[ $helm_exit -ne 0 ]]; then
+        error "Helm install failed for '$name': $(cat /tmp/helm_err_${name} 2>/dev/null)"
+      fi
+      rm -f "/tmp/helm_err_${name}"
+      success "Helm release '$name' installed"
+      continue
+    fi
+
+    case "$name" in
+      ollama)   tail_init_logs "$ns" "ollama-model-loader"   "Ollama" ;;
+      llamacpp) tail_init_logs "$ns" "llamacpp-model-loader" "llama.cpp" ;;
+    esac
+
+    local helm_exit=0
+    wait "$helm_pid" || helm_exit=$?
+    rm -f "/tmp/helm_err_${name}"
+    [[ $helm_exit -ne 0 ]] && \
+      error "Helm install failed for '$name': $(cat /tmp/helm_err_${name} 2>/dev/null)"
+    success "Helm release '$name' installed"
   done
 }
 
@@ -465,12 +637,18 @@ print_summary() {
   echo ""
   echo -e "  ${BOLD}Podman machine:${RESET}  $MACHINE_NAME"
   echo -e "  ${BOLD}Kind cluster:${RESET}    $KIND_CLUSTER_NAME"
-  echo -e "  ${BOLD}Ollama image:${RESET}    $OLLAMA_IMAGE"
+  backend_enabled "ollama"   && echo -e "  ${BOLD}Ollama image:${RESET}    $OLLAMA_IMAGE"
+  backend_enabled "llamacpp" && echo -e "  ${BOLD}llama.cpp image:${RESET} $LLAMACPP_IMAGE"
   echo -e "  ${BOLD}Namespaces:${RESET}      ${NAMESPACES[*]}"
   echo -e "  ${BOLD}Helm releases:${RESET}"
   for i in "${!HELM_NAMES[@]}"; do
     echo -e "    • ${HELM_NAMES[$i]} → ${HELM_NAMESPACES[$i]}"
   done
+  echo ""
+  echo -e "  ${CYAN}Endpoints:${RESET}"
+  backend_enabled "ollama"   && echo -e "    Ollama:     http://localhost:30434"
+  backend_enabled "llamacpp" && echo -e "    llama.cpp:  http://localhost:30480"
+  echo -e "    n8n:        http://localhost:30678"
   echo ""
   echo -e "  ${CYAN}kubectl get pods -A${RESET}   — check all pods"
   echo -e "  ${CYAN}helm list -A${RESET}          — check Helm releases"
@@ -489,11 +667,13 @@ main() {
   echo -e "${RESET}"
 
   load_config
+  prompt_backends
   check_prerequisites
   install_tools
   setup_podman_machine
   setup_kind_cluster
-  build_and_load_ollama_image
+  backend_enabled "ollama"   && build_and_load_ollama_image
+  backend_enabled "llamacpp" && build_and_load_llamacpp_image
   create_namespaces
   install_helm_charts
   restart_and_verify

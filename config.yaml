@@ -1,24 +1,40 @@
 podman:
   machine_name: "podman-machine-default"
   cpu: "8"
-  memory: "16384"
+  memory: "21944"
   disk: "100"
 
-paths:
-  kind_config:    "./kind/kind-config.yaml"
-  n8n_chart:      "./helm/n8n"
-  ollama_chart:   "./helm/ollama"
-  ollama_dockerfile:  "./ollama/macos/Dockerfile"
-
-ollama:
-  image: "fedora-ollama-vulkan:v1"
+krunkit:
+  brew_tap: slp/krunkit
+  brew_pkg: slp/krunkit/krunkit
 
 kind:
   cluster_name: "ai-cluster"
 
+# -------------------------------------------------------------------
+# backends: controls which inference engines are installed.
+# Use "llamacpp" (no hyphen) — this is the internal identifier used
+# by setup.sh. The namespace and chart path use "llamacpp" separately.
+# -------------------------------------------------------------------
+backends:
+  - ollama
+  - llamacpp
+
+ollama:
+  image: "fedora-ollama-vulkan:v1"
+
+llamacpp:
+  image: "fedora-llamacpp-vulkan:v1"
+
 namespaces:
   - n8n
   - ollama
+  - llamacpp
+
+paths:
+  kind_config:          "kind/kind-config.yaml"
+  ollama_dockerfile:    "ollama/macos/Dockerfile"
+  llamacpp_dockerfile:  "llamacpp/macos/Dockerfile"
 
 helm:
   releases:
@@ -28,7 +44,6 @@ helm:
     - name:      "ollama"
       chart:     "./helm/ollama"
       namespace: "ollama"
-
-krunkit:
-  brew_tap: slp/krunkit
-  brew_pkg: slp/krunkit/krunkit
+    - name:      "llamacpp"
+      chart:     "./helm/llamacpp"
+      namespace: "llamacpp"

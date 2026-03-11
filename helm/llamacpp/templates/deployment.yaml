@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ollama.fullname" . }}
+  name: {{ include "llamacpp.fullname" . }}
   labels:
-    {{- include "ollama.labels" . | nindent 4 }}
+    {{- include "llamacpp.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "ollama.selectorLabels" . | nindent 6 }}
+      {{- include "llamacpp.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "ollama.selectorLabels" . | nindent 8 }}
+        {{- include "llamacpp.selectorLabels" . | nindent 8 }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -20,9 +20,11 @@ spec:
     spec:
       securityContext:
         supplementalGroups: {{ .Values.podSecurityContext.supplementalGroups | toJson }}
+
       {{- if .Values.serviceAccount.create }}
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "ollama.fullname" .) }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "llamacpp.fullname" .) }}
       {{- end }}
+
       initContainers:
         - name: fix-dri-permissions
           image: busybox
@@ -39,8 +41,27 @@ spec:
           volumeMounts:
             - name: dev-dri
               mountPath: /dev/dri
+
+        - name: wait-for-models
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              {{- range .Values.models }}
+              echo "Waiting for /models/{{ .filename }}..."
+              until [ -f "/models/{{ .filename }}" ]; do
+                echo "  not yet present — sleeping 10s"
+                sleep 10
+              done
+              echo "Found: {{ .filename }}"
+              {{- end }}
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+
       containers:
-        - name: ollama
+        - name: llamacpp-server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
@@ -49,60 +70,84 @@ spec:
               add: {{ .Values.securityContext.capabilities.add | toJson }}
           ports:
             - name: http
-              containerPort: 11434
+              containerPort: {{ .Values.service.port }}
               protocol: TCP
+
+          command: ["llama-server"]
+          args:
+            - "--models-dir"
+            - "/models"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "{{ .Values.service.port }}"
+            - "--n-gpu-layers"
+            - "{{ .Values.server.gpuLayers }}"
+            - "--ctx-size"
+            - "{{ .Values.server.contextSize }}"
+            - "--threads"
+            - "{{ .Values.server.threads }}"
+            - "--log-verbosity"
+            - "{{ .Values.log.verbosity }}"
+            - "--jinja"
+
           env:
+            - name: GGML_VK_DEVICE
+              value: "0"
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}
             {{- end }}
+
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+            - name: dev-dri
+              mountPath: /dev/dri
+            - name: sys-dev
+              mountPath: /sys/dev
+              readOnly: true
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.startupProbe.httpGet.path }}
+              port: {{ .Values.startupProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
-              path: /api/tags
+              path: /health
               port: http
             initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
             periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
             timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
             failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 6 }}
           {{- end }}
+
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
-              path: /api/tags
+              path: /health
               port: http
-            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 15 }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
             timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
           {{- end }}
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            {{- if .Values.persistence.data.enabled }}
-            - name: ollama-data
-              mountPath: {{ .Values.persistence.data.mountPath }}
-            {{- end }}
-            {{- if .Values.persistence.models.enabled }}
-            - name: ollama-models
-              mountPath: {{ .Values.persistence.models.mountPath }}
-            {{- end }}
-            - name: dev-dri
-              mountPath: /dev/dri
-            - name: sys-dev
-              mountPath: /sys/dev
-              readOnly: true
+
       volumes:
-        {{- if .Values.persistence.data.enabled }}
-        - name: ollama-data
+        - name: model-storage
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.data.existingClaim | default (printf "%s-data" (include "ollama.fullname" .)) }}
-        {{- end }}
-        {{- if .Values.persistence.models.enabled }}
-        - name: ollama-models
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.models.existingClaim | default (printf "%s-models" (include "ollama.fullname" .)) }}
-        {{- end }}
+            claimName: {{ include "llamacpp.fullname" . }}-pvc
         - name: dev-dri
           hostPath:
             path: /dev/dri
@@ -111,6 +156,7 @@ spec:
           hostPath:
             path: /sys/dev
             type: Directory
+
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

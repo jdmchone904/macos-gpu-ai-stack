@@ -1,4 +1,3 @@
-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ai-cluster
@@ -8,18 +7,20 @@ nodes:
       - hostPath: /dev/dri
         containerPath: /dev/dri
         propagation: HostToContainer
-  # Map ports from Kind container to your host machine
     extraPortMappings:
     - containerPort: 30678    # n8n NodePort
       hostPort: 30678         # Access via localhost:30678
       protocol: TCP
-    - containerPort: 30434    # ollama NodePort
+    - containerPort: 30434    # Ollama NodePort
       hostPort: 30434         # Access via localhost:30434
       protocol: TCP
-    - containerPort: 80       # HTTP ingress
-      hostPort: 8080          # Access via localhost:8080  
+    - containerPort: 30480    # llama-server NodePort
+      hostPort: 30480         # Access via localhost:30480
       protocol: TCP
-    - containerPort: 443      # HTTPS ingress  
+    - containerPort: 80       # HTTP ingress
+      hostPort: 8080          # Access via localhost:8080
+      protocol: TCP
+    - containerPort: 443      # HTTPS ingress
       hostPort: 8443          # Access via localhost:8443
       protocol: TCP
     - containerPort: 30080    # Alternative HTTP port
