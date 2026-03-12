@@ -10,7 +10,7 @@ Running llama.cpp natively on macOS via Metal will always be faster. However, th
 By running inside Kubernetes you get:
 - **Isolation** — models and services run in containers with defined resource limits, keeping your Mac environment clean
 - **Extensibility** — easily add services alongside llama.cpp such as n8n for workflow automation, Open WebUI for a chat interface, custom model training pipelines, full stack application testing, or any other containerized workload
-- **Reproducibility** — the entire stack is defined as code and can be spun up from scratch on any Apple Silicon Mac with a single script
+- **Reproducibility** — the entire stack is defined as code and can be spun up from scratch on any Apple Silicon Mac with a single command
 - **Service networking** — all services communicate via Kubernetes DNS, making it easy to wire up complex multi-service AI workflows
 
 ### llama.cpp vs Ollama — which should you use?
@@ -19,7 +19,7 @@ By running inside Kubernetes you get:
 
 **Use Ollama** if you need its specific model management features (`ollama pull`, Modelfile customisation) or are integrating with tools that target the Ollama API specifically.
 
-The setup script will ask you which backend to install at runtime. You can install one or both.
+The setup command will ask you which backend to install at runtime. You can switch backends at any time after installation using `./gpustack backend switch`.
 
 ### Performance expectations
 
@@ -103,10 +103,6 @@ krunkit:
 kind:
   cluster_name: ai-cluster
 
-backends:
-  - llamacpp   # default — recommended for best performance
-  # - ollama   # uncomment to install Ollama instead or as well
-
 llamacpp:
   image: "fedora-llamacpp-vulkan:v1"
 
@@ -187,22 +183,43 @@ models:
 
 > **Recommendation:** During initial setup, comment out large models (20B+) and add them after setup via `helm upgrade` to avoid long waits during install.
 
-### 5. Run the setup script
+### 5. Run setup
 ```bash
-/opt/homebrew/bin/bash setup.sh
+./gpustack setup
 ```
 
-The script will prompt you to choose which backend(s) to install:
+#### Optional: install gpustack to your PATH
+
+If you'd prefer to run `gpustack` from anywhere instead of `./gpustack` from the repo root, you can symlink it to `/usr/local/bin`:
+
+```bash
+make install
 ```
-  Which inference backends would you like to install?
-  1) llama.cpp only  [default]
-  2) Ollama only
-  3) Both llama.cpp and Ollama
+
+This creates a symlink pointing back to the repo, so the `lib/` directory is always resolved correctly. To remove it:
+
+```bash
+make uninstall
+```
+
+To verify the install:
+
+```bash
+make check
+# or
+gpustack --version
+```
+
+The script will prompt you to choose which backend to install:
+```
+  Which inference backend would you like to install?
+  1) llama.cpp  [default]
+  2) Ollama
 
   Enter choice [1]:
 ```
 
-The script will then:
+The setup will then:
 1. Install Podman, kind, helm, krunkit, and libkrun-efi via Homebrew
 2. Create and start the Podman VM with GPU passthrough enabled
 3. Set the rootful Podman connection as default
@@ -256,8 +273,8 @@ helm list -A
 # llama.cpp
 curl http://localhost:30480/health
 
-# Ollama (if installed)
-curl http://localhost:30434/api/tags
+# Ollama
+curl http://localhost:30434/
 
 # n8n — open in browser
 open http://localhost:30678
@@ -265,53 +282,115 @@ open http://localhost:30678
 
 ---
 
-## Starting, Stopping and Restarting the Stack
+## CLI Reference
 
-Use `cluster.sh` to manage the stack after initial setup:
+All stack management is done through the `gpustack` CLI. Run it directly from the repo root — no installation required.
+
+```
+./gpustack <command> [subcommand] [options]
+```
+
+### Top-level commands
+
+| Command | Description |
+|---|---|
+| `./gpustack setup` | Install and configure the full GPU stack |
+| `./gpustack teardown` | Destroy the full GPU stack |
+| `./gpustack cluster <subcommand>` | Manage the Podman machine and kind cluster |
+| `./gpustack backend <subcommand>` | Manage inference backends |
+| `./gpustack --help` | Show top-level help |
+| `./gpustack --version` | Show version |
+
+Run `./gpustack <command> --help` for detailed help on any command.
+
+---
+
+### gpustack setup
+
+Install and configure the full GPU stack from scratch.
 
 ```bash
-/opt/homebrew/bin/bash cluster.sh start
-/opt/homebrew/bin/bash cluster.sh stop
-/opt/homebrew/bin/bash cluster.sh restart
-/opt/homebrew/bin/bash cluster.sh status
+./gpustack setup
+./gpustack setup --help
 ```
 
 ---
 
-## Teardown
+### gpustack teardown
 
-To completely uninstall the stack and all its components:
+Destroy the full GPU stack and uninstall all components.
 
 ```bash
-/opt/homebrew/bin/bash teardown.sh
+./gpustack teardown           # prompts for confirmation
+./gpustack teardown --force   # skip confirmation
 ```
 
-This will:
-- Stop and remove all Podman machines
-- Kill any stray `gvproxy` and `krunkit` processes
-- Uninstall `podman`, `podman-desktop`, `kind`, `helm`, `krunkit`, and `libkrun-efi`
-- Remove the `slp/krunkit` brew tap
-- Delete all Podman config and data directories
+This will permanently remove:
+- Podman machine and all containers
+- kind cluster
+- `podman`, `podman-desktop`, `kind`, `helm`, `krunkit` (brew packages)
+- All Podman config and data directories
 
 > **Warning:** This is destructive and irreversible. All containers, images, volumes, and cluster data will be permanently deleted. Downloaded models will also be lost.
 
 ---
 
-## Day-to-Day Operations
+### gpustack cluster
 
-### Starting after a reboot
-The Podman machine and kind cluster do not start automatically after a reboot:
+Manage the Podman machine and kind cluster.
+
 ```bash
-podman machine start podman-machine-default
-podman system connection default podman-machine-default-root
-kind export kubeconfig --name ai-cluster
-kubectl get nodes
+./gpustack cluster start    # Start Podman machine and kind cluster
+./gpustack cluster stop     # Stop kind cluster and Podman machine
+./gpustack cluster status   # Show node, pod, Helm release, and backend health status
+./gpustack cluster --help
 ```
 
-### Stopping everything
+Use `cluster start` after a reboot to bring the stack back up:
 ```bash
-kubectl delete --all pods -A 2>/dev/null || true
-podman machine stop podman-machine-default
+./gpustack cluster start
+```
+
+---
+
+### gpustack backend
+
+Manage inference backends.
+
+```bash
+./gpustack backend status              # Show health, pod status, and recent logs
+./gpustack backend start               # Scale the active backend deployment up
+./gpustack backend stop                # Scale the active backend deployment down
+./gpustack backend logs                # Tail logs for the active backend pod
+./gpustack backend switch llamacpp     # Switch to llama.cpp
+./gpustack backend switch ollama       # Switch to Ollama
+./gpustack backend --help
+```
+
+#### Switching backends
+
+`backend switch` performs a surgical swap without tearing down the full stack:
+1. Helm uninstalls the current backend
+2. Deletes the backend's PersistentVolumeClaims (model cache)
+3. Checks if the target backend image is loaded in kind — builds and loads it if not
+4. Helm installs the new backend and downloads models
+5. Waits for the deployment to be fully healthy before returning
+
+```bash
+./gpustack backend switch ollama
+./gpustack backend switch llamacpp
+```
+
+> **Note:** The first switch to a backend whose image has not been built will trigger a full image build inside the Podman VM, which takes 10–20 minutes.
+
+---
+
+## Starting, Stopping and Restarting the Stack
+
+```bash
+./gpustack cluster start    # start after reboot
+./gpustack cluster stop     # stop everything cleanly
+./gpustack cluster status   # check current state
 ```
 
 ---
@@ -414,6 +493,12 @@ server:
 
 Ollama exposes its API on `http://localhost:30434`.
 
+### Check Ollama is running
+```bash
+curl http://localhost:30434/
+# returns: Ollama is running
+```
+
 ### List downloaded models
 ```bash
 curl -s http://localhost:30434/api/tags | python3 -m json.tool
@@ -470,7 +555,6 @@ Benchmarks run on a **Mac M3 Pro** using Vulkan GPU acceleration via krunkit/lib
 ### llama.cpp tok/s
 
 ```bash
-# Replace model name with one of your downloaded models
 curl -s http://localhost:30480/completion \
   -H "Content-Type: application/json" \
   -d '{
@@ -533,9 +617,9 @@ podman machine ssh podman-machine-default -- \
   podman rmi localhost/fedora-llamacpp-vulkan:v1 2>/dev/null || true
 ```
 
-### 2. Re-run the setup script
+### 2. Re-run setup (skips already-completed steps)
 ```bash
-/opt/homebrew/bin/bash setup.sh
+./gpustack setup
 ```
 
 ### 3. Restart the deployment to pick up the new image
@@ -550,7 +634,7 @@ Edit `llama-cpp/macos/Dockerfile` and change the clone line:
 # Replace this:
 RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /llama.cpp
 
-# With a specific tag (example):
+# With a specific tag:
 RUN git clone --branch b5140 --depth 1 https://github.com/ggml-org/llama.cpp.git /llama.cpp
 ```
 
@@ -568,9 +652,9 @@ podman machine ssh podman-machine-default -- \
   ctr -n k8s.io images rm docker.io/library/fedora-ollama-vulkan:v1 2>/dev/null || true
 ```
 
-### 2. Re-run the setup script
+### 2. Re-run setup (skips already-completed steps)
 ```bash
-/opt/homebrew/bin/bash setup.sh
+./gpustack setup
 ```
 
 ### 3. Restart the deployment
@@ -584,7 +668,6 @@ kubectl rollout status deployment/ollama -n ollama
 ## Updating Helm Charts
 
 ```bash
-# Upgrade a single release
 helm upgrade llamacpp ./helm/llamacpp -n llamacpp
 helm upgrade ollama   ./helm/ollama   -n ollama
 helm upgrade n8n      ./helm/n8n      -n n8n
@@ -606,7 +689,7 @@ Required when adding or removing port mappings, or when the cluster becomes unre
 export DOCKER_HOST="unix://$(podman info --format '{{.Host.RemoteSocket.Path}}')"
 export KIND_EXPERIMENTAL_PROVIDER=podman
 kind delete cluster --name ai-cluster
-/opt/homebrew/bin/bash setup.sh
+./gpustack setup
 ```
 
 ---
@@ -618,7 +701,7 @@ Required when changing CPU/memory/disk in `config.yaml`, or after a krunkit upgr
 ```bash
 podman machine stop podman-machine-default
 podman machine rm podman-machine-default
-/opt/homebrew/bin/bash setup.sh
+./gpustack setup
 ```
 
 > **Warning:** This destroys the kind cluster and all loaded images. Downloaded models on PersistentVolumes are preserved if `helm.sh/resource-policy: keep` is set on the PVCs (default).
@@ -629,9 +712,7 @@ podman machine rm podman-machine-default
 
 ### kubectl cannot reach the cluster after reboot
 ```bash
-podman machine start podman-machine-default
-podman system connection default podman-machine-default-root
-kind export kubeconfig --name ai-cluster
+./gpustack cluster start
 ```
 
 ### kind delete/get cluster fails with Docker socket error
@@ -644,21 +725,17 @@ kind get clusters
 ### Podman machine crashes under load
 libkrun-efi can crash the VM under heavy CPU or memory pressure. Recovery:
 ```bash
-podman machine stop podman-machine-default 2>/dev/null || true
-podman machine start podman-machine-default
-podman system connection default podman-machine-default-root
-kind export kubeconfig --name ai-cluster
-kubectl get nodes
+./gpustack cluster start
 ```
 If crashes are frequent, reduce `memory` in `config.yaml` and recreate the machine.
 
 ### llama-server not responding
 ```bash
-# Check pod status
-kubectl get pods -n llamacpp
+# Check pod status and health
+./gpustack backend status
 
-# Check logs
-kubectl logs -n llamacpp deployment/llamacpp -f
+# Tail live logs
+./gpustack backend logs
 
 # Check Vulkan is working — should show "Virtio-GPU Venus"
 kubectl logs -n llamacpp deployment/llamacpp | grep -i vulkan
@@ -692,8 +769,8 @@ helm upgrade llamacpp ./helm/llamacpp -n llamacpp
 
 ### Ollama not responding
 ```bash
-kubectl get pods -n ollama
-kubectl logs -n ollama deployment/ollama -f
+./gpustack backend status
+./gpustack backend logs
 kubectl logs -n ollama deployment/ollama | grep -i vulkan
 ```
 

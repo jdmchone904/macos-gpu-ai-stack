@@ -97,7 +97,6 @@ remove_dir "$HOME/.local/share/containers"
 remove_dir "$HOME/.cache/containers"
 
 # Clean up any stray podman temp files
-sudo rm -rf /private/var/tmp/podman* 2>/dev/null && success "Removed stray podman tmp files" || true
 rm -rf /tmp/podman* 2>/dev/null || true
 
 # =============================================================================

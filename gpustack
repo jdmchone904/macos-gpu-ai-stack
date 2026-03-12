@@ -1,0 +1,133 @@
+#!/opt/homebrew/bin/bash
+# =============================================================================
+# gpustack — CLI dispatcher for the macOS GPU stack
+# Usage: ./gpustack <command> [subcommand] [options]
+# =============================================================================
+set -euo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "ERROR: bash 4+ required. Install with: brew install bash" >&2
+  echo "       Then run with: /opt/homebrew/bin/bash gpustack" >&2
+  exit 1
+fi
+
+# Resolve true script location even when invoked via symlink
+_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$_SOURCE" ]]; do
+  _DIR="$(cd -P "$(dirname "$_SOURCE")" && pwd)"
+  _SOURCE="$(readlink "$_SOURCE")"
+  [[ "$_SOURCE" != /* ]] && _SOURCE="$_DIR/$_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_SOURCE")" && pwd)"
+
+LIB_DIR="$SCRIPT_DIR/lib"
+export CONFIG_FILE="${GPUSTACK_CONFIG:-$SCRIPT_DIR/config.yaml}"
+
+# Guard: lib directory must exist
+if [[ ! -d "$LIB_DIR" ]]; then
+  echo "ERROR: lib/ directory not found at $LIB_DIR" >&2
+  exit 1
+fi
+
+# --- Source shared libs ------------------------------------------------------
+# shellcheck source=lib/common.sh
+source "$LIB_DIR/common.sh"
+# shellcheck source=lib/config.sh
+source "$LIB_DIR/config.sh"
+
+# --- Top-level help ----------------------------------------------------------
+gpustack_help() {
+  echo ""
+  echo -e "${BOLD}Usage:${RESET} ./gpustack <command> [subcommand] [options]"
+  echo ""
+  echo -e "${BOLD}Commands:${RESET}"
+  echo -e "  ${CYAN}setup${RESET}      Install and configure the full GPU stack"
+  echo -e "  ${CYAN}teardown${RESET}   Destroy the full GPU stack"
+  echo -e "  ${CYAN}cluster${RESET}    Manage the Podman machine and kind cluster"
+  echo -e "  ${CYAN}backend${RESET}    Manage inference backends (llamacpp, ollama)"
+  echo ""
+  echo -e "  Run ${CYAN}./gpustack <command> --help${RESET} for more information on a command."
+  echo ""
+  echo -e "${BOLD}Options:${RESET}"
+  echo -e "  ${CYAN}-h, --help${RESET}     Show this help message"
+  echo -e "  ${CYAN}-v, --version${RESET}  Show version"
+  echo ""
+  echo -e "${BOLD}Environment:${RESET}"
+  echo -e "  ${CYAN}GPUSTACK_CONFIG${RESET}  Path to config.yaml (default: ./config.yaml)"
+  echo ""
+}
+
+gpustack_version() {
+  echo "gpustack 1.0.0"
+}
+
+# --- Dispatch ----------------------------------------------------------------
+CMD="${1:-}"
+
+# No command → show help
+if [[ -z "$CMD" ]]; then
+  gpustack_help
+  exit 0
+fi
+
+shift  # remove CMD from "$@" so subcommands receive only their own args
+
+case "$CMD" in
+
+  setup)
+    source "$LIB_DIR/setup.sh"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      setup_help
+    else
+      load_config
+      prompt_backends
+      check_prerequisites
+      cmd_setup
+    fi
+    ;;
+
+  teardown)
+    source "$LIB_DIR/teardown.sh"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      teardown_help
+    else
+      load_config
+      cmd_teardown "$@"
+    fi
+    ;;
+
+  cluster)
+    source "$LIB_DIR/cluster.sh"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      cluster_help
+    else
+      load_config
+      cmd_cluster "$@"
+    fi
+    ;;
+
+  backend)
+    source "$LIB_DIR/backend.sh"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+      backend_help
+    else
+      load_config
+      cmd_backend "$@"
+    fi
+    ;;
+
+  -h|--help|help)
+    gpustack_help
+    ;;
+
+  -v|--version|version)
+    gpustack_version
+    ;;
+
+  *)
+    echo -e "${RED}[ERROR]${RESET} Unknown command: '$CMD'" >&2
+    echo ""
+    gpustack_help
+    exit 1
+    ;;
+esac
