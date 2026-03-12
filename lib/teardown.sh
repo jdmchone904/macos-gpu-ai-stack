@@ -105,9 +105,8 @@ cmd_teardown() {
   _remove_dir "$HOME/.local/share/containers"
   _remove_dir "$HOME/.cache/containers"
 
-  sudo rm -rf /private/var/tmp/podman* 2>/dev/null \
+  rm -rf /tmp/podman* 2>/dev/null \
     && success "Removed stray podman tmp files" || true
-  rm -rf /tmp/podman* 2>/dev/null || true
 
   # Summary
   echo ""
